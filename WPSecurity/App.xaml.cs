@@ -101,6 +101,9 @@ namespace WPSecurity
                 // An unhandled exception has occurred; break into the debugger
                 System.Diagnostics.Debugger.Break();
             }
+
+            MessageBox.Show(e.ExceptionObject.ToString(), "Unexpected error", MessageBoxButton.OK);
+
         }
 
         #region Phone application initialization
