@@ -1,34 +1,24 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Animation;
-using System.Windows.Shapes;
-using Microsoft.Phone.Controls;
-using System.Windows.Media.Imaging;
-using System.Net.Sockets;
-using System.Text;
-using System.IO;
-using Microsoft.Devices;
 using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Threading;
+using System.Windows.Input;
+using System.Windows.Media.Imaging;
+using Microsoft.Devices;
+using Microsoft.Phone.Controls;
 using Microsoft.Phone.Shell;
 
 namespace WPSecurity
 {
     public partial class MainPage : PhoneApplicationPage
     {
-        Microsoft.Devices.PhotoCamera c;
+        Microsoft.Devices.PhotoCamera _Camera;
+
         public MainPage()
         {
             InitializeComponent();
-
-            
         }
 
         public void DoFrame()
@@ -39,16 +29,20 @@ namespace WPSecurity
             {
                 try
                 {
-                    int[] buf = new int[(int)c.PreviewResolution.Width * (int)c.PreviewResolution.Height];
-                    c.GetPreviewBufferArgb32(buf);
+                    int height = (int)_Camera.PreviewResolution.Height;
+                    int width = (int)_Camera.PreviewResolution.Width;
 
-                    WriteableBitmap wb = new WriteableBitmap((int)c.PreviewResolution.Width, (int)c.PreviewResolution.Height);
+                    var buf = new int[width * height];
+                    _Camera.GetPreviewBufferArgb32(buf);
+
+                    var wb = new WriteableBitmap(width, height);
                     Array.Copy(buf, wb.Pixels, buf.Length);
+                    buf = null;
 
                     byte[] data = null;
-                    using (MemoryStream ms = new MemoryStream())
+                    using (var ms = new MemoryStream())
                     {
-                        wb.SaveJpeg(ms, (int)c.PreviewResolution.Width, (int)c.PreviewResolution.Height, 0, 50);
+                        wb.SaveJpeg(ms, width, height, 0, 50);
                         data = ms.ToArray();
                     }
 
@@ -57,17 +51,25 @@ namespace WPSecurity
                     //)
                     {
                         socket.SendBufferSize = 65507;
-
+                        
                         SocketAsyncEventArgs a = new SocketAsyncEventArgs();
                         a.RemoteEndPoint = new IPEndPoint(IPAddress.Broadcast, 11000);
                         a.SetBuffer(data, 0, data.Length);
-                        a.Completed += new EventHandler<SocketAsyncEventArgs>(delegate(object s, SocketAsyncEventArgs ee)
-                        {
-                            Debug.WriteLine(ee.SocketError);
-                            ((Socket)s).Dispose();
-                            DoFrame();
-                        });
+                        a.Completed += (s, e) =>
+                            {
+                                try
+                                {
+                                    Debug.WriteLine(e.SocketError);
+                                    ((Socket)s).Dispose();
+                                }
+                                catch (Exception ex)
+                                {
+                                    Debug.WriteLine(ex); // can't do anything
+                                }
+                                DoFrame();
+                            };
 
+                        bool cleanup = true;
                         if (data.Length > socket.SendBufferSize)
                         {
                             Debug.WriteLine("Aborting frame due to size");
@@ -75,14 +77,19 @@ namespace WPSecurity
                         else
                         {
                             Debug.WriteLine("Pack Send: " + data.Length);
-                            var f = socket.ConnectAsync(a);
+                            cleanup = !socket.ConnectAsync(a);
+                        }
+
+                        if (cleanup)
+                        {
+                            socket.Dispose();
+                            DoFrame();
                         }
                     }
                 }
                 catch (Exception ex)
                 {
                     Debug.WriteLine(ex);
-
                     Thread.Sleep(1000);
                     DoFrame();
                 }
@@ -93,36 +100,29 @@ namespace WPSecurity
         {
             base.OnNavigatedTo(e);
             // Disable sleep
-            PhoneApplicationService.Current.UserIdleDetectionMode = IdleDetectionMode.Disabled;
-
-            c = new Microsoft.Devices.PhotoCamera(Microsoft.Devices.CameraType.Primary);
-            c.Initialized += (_, __) => DoFrame();
-            vb.SetSource(c);
+            PhoneApplicationService.Current.UserIdleDetectionMode = 
+                IdleDetectionMode.Disabled;
+            
+            _Camera = new PhotoCamera(CameraType.Primary);
+            _Camera.Initialized += (_, __) => DoFrame();
+            vb.SetSource(_Camera);
         }
 
         private void LayoutRoot_ManipulationDelta(object sender, ManipulationDeltaEventArgs e)
         {
             if (e.DeltaManipulation.Scale.X > 0.0 && e.DeltaManipulation.Scale.Y > 0.0)
             {
-                // Scale in the X direction
-                double tmp = PenguinTransform.ScaleX * e.DeltaManipulation.Scale.X;
+                Func<double, double> EnforceLimits = (s) =>
+                {
+                    if (s < 1.0)
+                        s = 1.0;
+                    else if (s > 4.0)
+                        s = 4.0;
+                    return s;
+                };
 
-                if (tmp < 1.0)
-                    tmp = 1.0;
-                else if (tmp > 4.0)
-                    tmp = 4.0;
-
-                PenguinTransform.ScaleX = tmp;
-
-                // Scale in the Y direction
-                tmp = PenguinTransform.ScaleY * e.DeltaManipulation.Scale.Y;
-
-                if (tmp < 1.0)
-                    tmp = 1.0;
-                else if (tmp > 4.0)
-                    tmp = 4.0;
-
-                PenguinTransform.ScaleY = tmp;
+                vbImageTransform.ScaleX = EnforceLimits(vbImageTransform.ScaleX * e.DeltaManipulation.Scale.X);
+                vbImageTransform.ScaleY = EnforceLimits(vbImageTransform.ScaleY * e.DeltaManipulation.Scale.Y);
             }
         }
     }
